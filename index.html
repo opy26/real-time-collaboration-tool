@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CollabCode - Real Time Editor</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0f1e; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; }
+        
+        /* Navbar */
+        .navbar { background: #0d1526; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #4f8ef7; }
+        .navbar h1 { color: #4f8ef7; font-size: 22px; }
+        .navbar .status { color: #00d9a6; font-size: 14px; }
+        
+        /* Join Screen */
+        .join-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 20px; }
+        .join-screen h2 { color: #4f8ef7; font-size: 32px; }
+        .join-screen p { color: #aaaaaa; }
+        .join-screen input { padding: 12px 20px; border-radius: 10px; border: 2px solid #4f8ef7; background: #0d1526; color: #fff; font-size: 16px; width: 300px; outline: none; }
+        .join-screen button { padding: 12px 40px; background: #4f8ef7; color: #fff; border: none; border-radius: 10px; font-size: 16px; cursor: pointer; }
+        .join-screen button:hover { background: #2d6fd6; }
+
+        /* Editor Screen */
+        .editor-screen { display: none; flex-direction: column; height: 100vh; }
+        .editor-container { display: flex; flex: 1; overflow: hidden; }
+        
+        /* Sidebar */
+        .sidebar { width: 220px; background: #0d1526; padding: 20px; border-right: 1px solid #1e2d4a; }
+        .sidebar h3 { color: #4f8ef7; margin-bottom: 15px; font-size: 14px; text-transform: uppercase; }
+        .user-item { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; margin-bottom: 8px; background: #1a2640; }
+        .user-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .user-name { font-size: 14px; color: #ffffff; }
+
+        /* Notifications */
+        .notifications { padding: 10px 20px; background: #0d1526; border-bottom: 1px solid #1e2d4a; min-height: 40px; }
+        .notification { color: #00d9a6; font-size: 13px; }
+
+        /* Editor */
+        .editor-wrapper { flex: 1; padding: 20px; display: flex; flex-direction: column; }
+        .editor-toolbar { display: flex; gap: 10px; margin-bottom: 10px; }
+        .editor-toolbar button { padding: 6px 16px; background: #1a2640; color: #fff; border: 1px solid #4f8ef7; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .editor-toolbar button:hover { background: #4f8ef7; }
+        textarea { flex: 1; background: #0d1526; color: #ffffff; border: 2px solid #1e2d4a; border-radius: 10px; padding: 20px; font-size: 15px; font-family: 'Courier New', monospace; resize: none; outline: none; line-height: 1.6; }
+        textarea:focus { border-color: #4f8ef7; }
+
+        /* Word count */
+        .word-count { color: #aaaaaa; font-size: 12px; padding: 8px 0; }
+    </style>
+</head>
+<body>
+
+    <!-- Join Screen -->
+    <div class="join-screen" id="joinScreen">
+        <h2>CollabCode</h2>
+        <p>Real Time Collaborative Editor</p>
+        <input type="text" id="usernameInput" placeholder="Enter your name to join..." />
+        <button onclick="joinDocument()">Join Document</button>
+    </div>
+
+    <!-- Editor Screen -->
+    <div class="editor-screen" id="editorScreen">
+        <div class="navbar">
+            <h1>CollabCode 📝</h1>
+            <span class="status" id="connectionStatus">● Connected</span>
+        </div>
+        <div class="notifications" id="notifications"></div>
+        <div class="editor-container">
+            <div class="sidebar">
+                <h3>Online Users</h3>
+                <div id="usersList"></div>
+            </div>
+            <div class="editor-wrapper">
+                <div class="editor-toolbar">
+                    <button onclick="clearEditor()">Clear</button>
+                    <button onclick="copyContent()">Copy All</button>
+                    <button onclick="downloadContent()">Download</button>
+                    <select id="langPicker" style="background: #1a2640; color: #4f8ef7; border: 1px solid #4f8ef7; border-radius: 4px; padding: 5px; margin-left: 10px;">
+        <option value="python3">Python 3</option>
+        <option value="cpp">C++ (GCC 11)</option>
+        <option value="java">Java (JDK 17)</option>
+        <option value="c">C (GCC 11)</option>
+    </select>
+
+    <button onclick="executeCode()" style="background: #28a745; color: white; border: none; font-weight: bold; margin-left: 10px; padding: 6px 15px; border-radius: 4px; cursor: pointer;">
+        RUN CODE
+    </button>
+                </div>
+                <textarea id="editor" placeholder="Start typing... changes will sync in real time!"></textarea>
+                <div class="word-count" id="wordCount">Words: 0 | Characters: 0</div>
+            </div>
+        </div>
+        <div id="console" style="background: #050505; color: #00ff00; padding: 15px; font-family: 'Courier New', monospace; min-height: 120px; border: 2px solid #4f8ef7; border-radius: 8px; white-space: pre-wrap; margin-top: 15px;">
+        > System ready. Press RUN CODE to execute.
+    </div>
+    </div>
+    
+
+    <script>
+        const socket = io();
+        let username = '';
+        let isUpdating = false;
+
+        // Join document
+        function joinDocument() {
+            username = document.getElementById('usernameInput').value.trim();
+            if (!username) { alert('Please enter your name!'); return; }
+            document.getElementById('joinScreen').style.display = 'none';
+            document.getElementById('editorScreen').style.display = 'flex';
+            socket.emit('user-join', username);
+        }
+async function executeCode() {
+    const codeSnippet = document.getElementById('editor').value;
+    const selectedLang = document.getElementById('langPicker').value;
+    const terminal = document.getElementById('console');
+
+    if (!codeSnippet.trim()) {
+        terminal.innerHTML = "> Error: Editor is empty!";
+        terminal.style.color = "#ff6b6b";
+        return;
+    }
+
+    terminal.innerHTML = "> Executing code...";
+    terminal.style.color = "#00ff00";
+
+    const langMap = {
+        "python3": { language: "python3", versionIndex: "3" },
+        "java":    { language: "java",    versionIndex: "4" },
+        "c":       { language: "c",       versionIndex: "5" },
+        "cpp":     { language: "cpp17",   versionIndex: "0" }
+    };
+
+    const langConfig = langMap[selectedLang] || langMap["python3"];
+
+    try {
+        const response = await fetch('/run-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                code:         codeSnippet,
+                language:     langConfig.language,
+                versionIndex: langConfig.versionIndex
+            })
+        });
+
+        const result = await response.json();
+        terminal.innerHTML = "> " + (result.output || "No output").replace(/\n/g, '<br>> ');
+        terminal.style.color = result.error ? "#ff6b6b" : "#00ff00";
+
+    } catch (err) {
+        terminal.innerHTML = "> Network Error. Check your connection.";
+        terminal.style.color = "#ff6b6b";
+    }
+}
+
+        // Allow Enter key to join
+        document.getElementById('usernameInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') joinDocument();
+        });
+
+        // Load existing document
+        socket.on('load-document', (content) => {
+            document.getElementById('editor').value = content;
+            updateWordCount(content);
+        });
+
+        // Receive changes from other users
+        socket.on('receive-changes', (data) => {
+            isUpdating = true;
+            document.getElementById('editor').value = data.content;
+            updateWordCount(data.content);
+            isUpdating = false;
+        });
+
+        // Send changes to server
+        document.getElementById('editor').addEventListener('input', () => {
+            if (!isUpdating) {
+                const content = document.getElementById('editor').value;
+                socket.emit('text-change', { content, username });
+                updateWordCount(content);
+            }
+        });
+
+        // Update users list
+        socket.on('update-users', (users) => {
+            const usersList = document.getElementById('usersList');
+            usersList.innerHTML = '';
+            users.forEach(user => {
+                usersList.innerHTML += `
+                    <div class="user-item">
+                        <div class="user-dot" style="background:${user.color}"></div>
+                        <span class="user-name">${user.username}</span>
+                    </div>`;
+            });
+        });
+
+        // Show notifications
+        socket.on('user-notification', (message) => {
+            const notifications = document.getElementById('notifications');
+            notifications.innerHTML = `<span class="notification">● ${message}</span>`;
+            setTimeout(() => { notifications.innerHTML = ''; }, 3000);
+        });
+
+        // Word count
+        function updateWordCount(text) {
+            const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+            document.getElementById('wordCount').textContent = `Words: ${words} | Characters: ${text.length}`;
+        }
+
+        // Toolbar functions
+        function clearEditor() {
+            document.getElementById('editor').value = '';
+            socket.emit('text-change', { content: '', username });
+            updateWordCount('');
+        }
+
+        function copyContent() {
+            navigator.clipboard.writeText(document.getElementById('editor').value);
+            alert('Content copied!');
+        }
+
+        function downloadContent() {
+            const content = document.getElementById('editor').value;
+            const blob = new Blob([content], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'document.txt';
+            a.click();
+        }
+
+        // Connection status
+        socket.on('disconnect', () => {
+            document.getElementById('connectionStatus').textContent = '● Disconnected';
+            document.getElementById('connectionStatus').style.color = '#ff6b6b';
+        });
+
+        socket.on('connect', () => {
+            document.getElementById('connectionStatus').textContent = '● Connected';
+            document.getElementById('connectionStatus').style.color = '#00d9a6';
+        });
+    </script>
+</body>
+</html>
